@@ -1,22 +1,43 @@
-import { z } from 'zod';
+import { cleanEnv, str, url, host, num } from 'envalid';
 
-const config = z
-  .object({
-    OPENAI_API_TOKEN: z.string(),
-    REPLICATE_API_TOKEN: z.string(),
-    TYPESENSE_URL: z.string().url(),
-    AUTH_SERVICE_URL: z.string().url(), // linen server
-    INTERNAL_API_KEY: z.string(),
-    // we could assume that each chunk will have size of 768,
-    // so we can call the api with "max_context_token" = CHUNK_SIZE * (CHUNKS - 1)
-    CHUNK_SIZE: z.number().default(768),
-    CHUNKS: z.number().default(10),
-  })
-  .safeParse(process.env);
+const env = cleanEnv(process.env, {
+  OPENAI_API_TOKEN: str(),
+  INTERNAL_API_KEY: str(),
 
-if ('error' in config) {
-  console.error(config.error);
-  process.exit(1);
-}
+  AUTH_SERVICE_URL: url({
+    devDefault: 'http://localhost:3000',
+    default: 'https://www.linen.dev',
+  }),
 
-export default config.data;
+  // typesense client
+  NEXT_PUBLIC_TYPESENSE_HOST: host({
+    default: 'po6fgyhi38429jzkp-1.a1.typesense.net',
+    devDefault: 'localhost',
+  }),
+  TYPESENSE_PORT: num({
+    default: 443,
+    devDefault: 8108,
+  }),
+  TYPESENSE_PROTOCOL: str({
+    default: 'https',
+    devDefault: 'http',
+  }),
+  TYPESENSE_URL: url({
+    default: 'https://po6fgyhi38429jzkp-1.a1.typesense.net:443/multi_search',
+    devDefault: 'http://localhost:8108/multi_search',
+  }),
+  TYPESENSE_DATABASE: str({
+    default: 'threads',
+  }),
+  TYPESENSE_EMBEDDING_DB: str({
+    default: 'embeddings',
+  }),
+  // typesense api-key with upsert permission
+  TYPESENSE_ADMIN: str({
+    devDefault: 'xyz',
+  }),
+
+  TYPESENSE_SEARCH_ONLY: str({ devDefault: 'xyz' }),
+});
+
+export default env;

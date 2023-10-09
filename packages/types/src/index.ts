@@ -31,7 +31,7 @@ export * from './messageAttachments';
 export * from './messageReactions';
 export * from './slackAuthorizations';
 export * from './userThreadStatus';
-
+export * from './llm';
 /*
   This package redefines enums from `schema.prisma`.
   Ideally this package should be considered as a source of truth

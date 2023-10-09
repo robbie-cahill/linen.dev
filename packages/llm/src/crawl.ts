@@ -1,33 +1,27 @@
-import LangChain from './langchain';
-import Linen from './linen';
-import { join } from 'path';
-import StringUtils from './utils/string';
+import { CrawlOptions } from '@linen/types';
+import Crawler from './crawler';
 
 async function run() {
-  const communities = [
+  const communities: CrawlOptions[] = [
+    // {
+    //   communityName: 'threads.netmaker.io',
+    //   url: 'https://docs.netmaker.io',
+    //   selectors: ['div.md-content'],
+    // },
     {
-      communityName: 'threads.netmaker.io',
-      url: 'https://docs.netmaker.io',
-      selectors: ['div.md-content'],
-    },
-    {
+      accountId: '9f2dfdd8-0fc8-4ade-9484-b130fad6764b',
       communityName: 'discuss.flyte.org',
+      // docs
       url: 'https://docs.flyte.org',
       selectors: ['article[role="main"]'],
+      // git
+      // repo: 'https://github.com/flyteorg/flyte/tree/master/rsts',
+      // branch: 'master',
     },
   ];
 
   for (const record of communities) {
-    const { url, communityName } = record;
-    const community = await Linen.getCommunityInfo(communityName);
-    await LangChain.crawlToStore({
-      url,
-      communityName: community.name,
-      options: {
-        selectors: record.selectors,
-        output: join(__dirname, '../.db/crawl', StringUtils.clean(url)),
-      },
-    });
+    await Crawler.crawlToStore(record.accountId, record);
   }
 }
 

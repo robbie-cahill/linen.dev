@@ -1,4 +1,4 @@
-const { toKeywords } = require('./typesense');
+import { toKeywords } from './toKeywords';
 
 describe('#toKeywords', () => {
   it('works', () => {

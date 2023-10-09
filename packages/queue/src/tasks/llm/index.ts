@@ -1,14 +1,15 @@
-import axios from 'axios';
 import { JobHelpers } from 'graphile-worker';
 import { z } from 'zod';
 import { appendProtocol } from '@linen/utilities/url';
 import { getIntegrationUrl } from '@linen/utilities/domain';
 import LinenSdk from '@linen/sdk';
-import { MessageFormat, accounts } from '@linen/types';
+import { LLMPredictionResponse, MessageFormat } from '@linen/types';
 import crypto from 'crypto';
 import { prisma } from '@linen/database';
-import { getThreadUrl } from '@linen/utilities/url';
 import { Logger } from '../../helpers/logger';
+import { LangChain } from '@linen/llm';
+import { serializeAccount } from '@linen/serializers/account';
+import { parseBody } from './utils/parseBody';
 
 const linenSdk = new LinenSdk({
   apiKey: process.env.INTERNAL_API_KEY!,
@@ -16,177 +17,92 @@ const linenSdk = new LinenSdk({
   linenUrl: appendProtocol(getIntegrationUrl()),
 });
 
-const baseURL =
-  process.env.LLM_SERVICE_URL || 'http://llm.stage.linendev.com:3001';
-
-const llmServer = axios.create({
-  baseURL: baseURL,
-  headers: {
-    ['x-api-internal']: process.env.INTERNAL_API_KEY!,
-  },
-});
-
-// TODO: move to types
-type SourceDocument = {
-  pageContent: string;
-  metadata: {
-    source?: string;
-    threadId?: string;
-    loc: {
-      lines: {
-        from: number;
-        to: number;
-      };
-    };
-    title?: string;
-    language?: string;
-  };
-};
-
-type LLMPredictionResponse = {
-  text: string;
-  sourceDocuments: SourceDocument[];
-};
-
-async function llmPredict(data: {
-  communityName: string;
-  query: string;
-  threadId: string;
-}) {
-  const r = await llmServer.post<LLMPredictionResponse>('/predict', data);
-  return r.data;
-}
-
 export const llmQuestion = async (payload: any, helpers: JobHelpers) => {
   const logger = new Logger(helpers.logger);
 
   logger.info(payload);
+  const parsedPayload = z
+    .object({
+      accountId: z.string().uuid(),
+      authorId: z.string().uuid(),
+      channelId: z.string().uuid(),
+      threadId: z.string().uuid(),
+      communityName: z.string(),
+    })
+    .parse(payload);
+
+  const { accountId, authorId, channelId, threadId, communityName } =
+    parsedPayload;
 
   try {
-    const parsedPayload = z
-      .object({
-        accountId: z.string().uuid(),
-        authorId: z.string().uuid(),
-        channelId: z.string().uuid(),
-        threadId: z.string().uuid(),
-        communityName: z.string(),
-      })
-      .parse(payload);
-
-    const { accountId, authorId, channelId, threadId, communityName } =
-      parsedPayload;
-
     const thread = await prisma.threads.findUniqueOrThrow({
-      include: { messages: true, channel: true },
+      include: {
+        messages: true,
+        channel: {
+          include: { account: true },
+        },
+      },
       where: { id: threadId },
     });
 
+    const account = await prisma.accounts.findFirstOrThrow({
+      where: {
+        OR: [
+          { redirectDomain: communityName },
+          { slackDomain: communityName },
+          { discordDomain: communityName },
+          { discordServerId: communityName },
+        ],
+      },
+    });
+    const { search } = serializeAccount(account);
+
     logger.info({ llm: `found thread ${thread.id}` });
 
-    const llmResponse = await llmPredict({
-      communityName,
+    if (!search?.apiKey) {
+      throw new Error('missing search api-key');
+    }
+
+    const llmResponse = await LangChain.predict({
       query: thread.messages.map((m) => m.body).join(' '),
       threadId: thread.id,
+      summarize: false,
+      typesenseApiKey: search.apiKey,
+      channelId: thread.channel.id,
+      channelName: thread.channel.channelName,
+      accountId: account.id,
     });
 
     logger.info({ llm: `llm response ready` });
 
-    const threadAccountId = thread.channel.accountId;
+    const body = await parseBody(llmResponse as LLMPredictionResponse, {
+      account,
+      communityName,
+    });
 
-    if (threadAccountId) {
-      const account = await prisma.accounts.findUnique({
-        where: {
-          id: threadAccountId,
-        },
-      });
+    logger.info({
+      llm: `creating a new linen message for thread ${threadId}`,
+    });
 
-      if (account) {
-        const body = await parseBody(llmResponse, { account, communityName });
-
-        logger.info({
-          llm: `creating a new linen message for thread ${threadId}`,
-        });
-
-        await linenSdk.createNewMessage({
-          accountId,
-          authorId,
-          body,
-          channelId,
-          externalMessageId: crypto.randomUUID(),
-          threadId,
-          messageFormat: MessageFormat.LINEN,
-        });
-      }
-    }
+    await linenSdk.createNewMessage({
+      accountId,
+      authorId,
+      body,
+      channelId,
+      externalMessageId: crypto.randomUUID(),
+      threadId,
+      messageFormat: MessageFormat.LINEN,
+    });
   } catch (exception: any) {
-    logger.error(exception.message);
+    logger.error(exception);
+    await linenSdk.createNewMessage({
+      accountId,
+      authorId,
+      body: "Sorry, I don't know enough to give you a confident answer yet.",
+      channelId,
+      externalMessageId: crypto.randomUUID(),
+      threadId,
+      messageFormat: MessageFormat.LINEN,
+    });
   }
 };
-
-export function getReferences(documents: SourceDocument[]): string[] {
-  const sources: string[] = [];
-  documents.forEach((document) => {
-    const source = document.metadata.source || document.metadata.threadId;
-    if (source && !sources.includes(source)) {
-      sources.push(source);
-    }
-  });
-  return sources;
-}
-
-function getUrls(references: string[]) {
-  return references.filter(
-    (url) => url.startsWith('https://') || url.startsWith('http://')
-  );
-}
-
-function getThreadIds(references: string[]) {
-  return references.filter(
-    (url) => !url.startsWith('https://') && !url.startsWith('http://')
-  );
-}
-
-export async function parseBody(
-  response: LLMPredictionResponse,
-  { account, communityName }: { account: accounts; communityName: string }
-): Promise<string> {
-  // TODO: if is a url, show it, otherwise, it will be a threadId, we should build the url
-  // TODO https urls should not be wrapped by <>
-  const references = getReferences(response.sourceDocuments);
-  const urls = getUrls(references);
-  const threadIds = getThreadIds(references);
-  const threads = await prisma.threads.findMany({
-    where: {
-      id: { in: threadIds },
-    },
-  });
-
-  const threadUrls = threads.map((thread) => {
-    return getThreadUrl({
-      isSubDomainRouting: true,
-      slug: thread.slug,
-      incrementId: thread.incrementId,
-      settings: {
-        communityName,
-        redirectDomain: account.redirectDomain as string | undefined,
-      },
-      LINEN_URL:
-        process.env.NODE_ENV === 'development'
-          ? 'http://localhost:3000'
-          : 'https://www.linen.dev',
-    });
-  });
-
-  const refs = [...urls, ...threadUrls];
-
-  if (refs.length > 0) {
-    return [
-      response.text,
-      'References:',
-      [...urls, ...threadUrls].map((source) => `- ${source}`).join('\n'),
-    ].join('\n\n');
-  }
-  return response.text;
-}
-
-// TODO: follow up (replies)

@@ -9,7 +9,7 @@ module.exports = {
     },
     {
       name: 'queue',
-      script: 'yarn tsx watch src/index.ts',
+      script: 'yarn td queue',
       cwd: '../packages/queue',
     },
     // {
@@ -47,9 +47,9 @@ module.exports = {
     //   script: `ngrok http --region=us --hostname=${process.env.NGROK_HOSTNAME} 3000`,
     // },
     {
-      name: 'llm-server',
-      script: 'yarn tsx watch src/server.ts',
-      cwd: '../packages/llm',
+      name: 'queue-llm',
+      script: 'yarn tsx watch src/index-llm.ts',
+      cwd: '../packages/queue',
     },
   ],
 };

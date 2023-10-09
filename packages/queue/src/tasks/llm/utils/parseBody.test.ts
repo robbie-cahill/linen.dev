@@ -1,4 +1,4 @@
-import { getReferences, parseBody } from '.';
+import { parseBody, getReferences } from './parseBody';
 import { accounts } from '@linen/types';
 
 describe('#parseBody', () => {
@@ -10,6 +10,8 @@ describe('#parseBody', () => {
           pageContent: 'Hello, world!',
           metadata: {
             source: 'https://foo.bar',
+            id: 'random',
+            accountId: 'random',
             loc: {
               lines: {
                 from: 0,
@@ -37,6 +39,8 @@ describe('#getReferences', () => {
         pageContent: 'Hello, world!',
         metadata: {
           source: 'https://foo.bar',
+          id: 'random',
+          accountId: 'random',
           loc: {
             lines: {
               from: 0,
@@ -49,6 +53,8 @@ describe('#getReferences', () => {
         pageContent: 'Hello, world!',
         metadata: {
           source: 'https://foo.bar',
+          id: 'random',
+          accountId: 'random',
           loc: {
             lines: {
               from: 7,

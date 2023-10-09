@@ -1,8 +1,10 @@
 import { RecursiveUrlLoader } from 'langchain/document_loaders/web/recursive_url';
 import { compile } from 'html-to-text';
+import { measure } from '../utils/measure';
 
 class WebCrawler {
-  static async crawl({ url, selectors }) {
+  @measure
+  static async crawl(url: string, selectors: string[]) {
     const loader = new RecursiveUrlLoader(url, {
       extractor: compile({
         wordwrap: 130,

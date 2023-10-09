@@ -1,73 +1,139 @@
-import axios from 'axios';
 import env from './utils/env';
 import { measure } from './utils/measure';
+import { Client } from 'typesense';
+import { embeddingsModel } from './models';
+import * as vectorStore from 'langchain/vectorstores/typesense';
+import { Document } from 'langchain/document';
+import { TypesenseResponse } from '@linen/types';
+import axios from 'axios';
+import { toKeywords } from './utils/toKeywords';
 
-type ResponseT = {
-  results: {
-    hits: { document: { body: string; id: string } }[];
-  }[];
-};
+const vectorTypesenseClient = new Client({
+  nodes: [
+    {
+      host: env.NEXT_PUBLIC_TYPESENSE_HOST,
+      port: env.TYPESENSE_PORT,
+      protocol: env.TYPESENSE_PROTOCOL,
+    },
+  ],
+  apiKey: env.TYPESENSE_ADMIN,
+  numRetries: 3,
+  connectionTimeoutSeconds: 60,
+});
 
-const FILTERED_WORDS = ['the', 'me', 'I', 'a', 'an', 'is', 'how', 'what'];
-
-export function toKeywords(query: string) {
-  return query
-    .replace(/!|\?/g, '')
-    .split(/\s+/g)
-    .filter((word) => !FILTERED_WORDS.includes(word))
-    .map((word) => word.toLocaleLowerCase())
-    .join(' ');
-}
+const typesenseVectorStoreConfig = {
+  maxRetries: 0,
+  typesenseClient: vectorTypesenseClient,
+  schemaName: env.TYPESENSE_EMBEDDING_DB,
+  columnNames: {
+    vector: 'vec',
+    pageContent: 'content',
+    metadataColumnNames: [
+      'id',
+      'accountId',
+      'channelId',
+      'threadId',
+      'contentType',
+      'source',
+    ],
+  },
+} satisfies vectorStore.TypesenseConfig;
 
 export default class Typesense {
   @measure
   static async queryThreads({
     query,
     apiKey,
+    limit = 10,
+    channelId,
+    channelName,
+    accountId,
   }: {
     query: string;
     apiKey: string;
+    limit?: number;
+    channelId?: string;
+    channelName?: string;
+    accountId: string;
   }) {
-    const res: ResponseT = await axios
-      .post(
+    const vec = await embeddingsModel.embedQuery(query);
+    const res = await axios
+      .post<TypesenseResponse>(
         env.TYPESENSE_URL,
         {
           searches: [
             {
+              collection: env.TYPESENSE_DATABASE,
               query_by: 'body',
-              collection: 'threads',
               q: toKeywords(query),
-              page: 1,
               highlight_fields: 'none',
               include_fields: 'body,id',
-              // exhaustive_search: true,
               prefix: false,
-              limit: env.CHUNKS,
+              limit_hits: limit,
+              filter_by: [
+                `accountId:=${accountId}`,
+                `is_public:=true`,
+                channelName ? `channel_name:!=${channelName}` : null,
+              ]
+                .filter((e) => e)
+                .join(' && '),
+            },
+            {
+              collection: env.TYPESENSE_EMBEDDING_DB,
+              query_by: 'content',
+              q: toKeywords(query),
+              vector_query: `vec:([${vec.join()}], k:${limit})`,
+              highlight_fields: 'none',
+              exclude_fields: 'vec',
+              prefix: false,
+              filter_by: [
+                `accountId:=${accountId}`,
+                channelId ? `channelId:!=${channelId}` : null,
+              ]
+                .filter((e) => e)
+                .join(' && '),
             },
           ],
         },
         {
           headers: {
             'Content-Type': 'application/json',
-            'x-typesense-api-key': apiKey,
+            'x-typesense-api-key': env.TYPESENSE_SEARCH_ONLY,
           },
           timeout: 60 * 1000,
         }
       )
       .then((res) => res.data)
-      .catch((res) => console.error('%j', res));
+      .catch((res) => {
+        console.error('%j', res);
+        throw res;
+      });
 
     return res.results
       .map((r) =>
         r.hits
-          .map((h) => {
+          .map(({ document }) => document)
+          .map(({ body, content, ...rest }) => {
             return {
-              body: h.document.body,
-              id: h.document.id,
+              content: body || content,
+              ...rest,
             };
           })
           .flat()
       )
       .flat();
+  }
+
+  static async getVectorStoreWithTypesense() {
+    return new vectorStore.Typesense(
+      embeddingsModel,
+      typesenseVectorStoreConfig
+    );
+  }
+
+  @measure
+  static async store(chunkedDocs: Document<Record<string, any>>[]) {
+    const typesenseVectorStore = await this.getVectorStoreWithTypesense();
+    await typesenseVectorStore.addDocuments(chunkedDocs);
   }
 }

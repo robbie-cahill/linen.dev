@@ -1,44 +1,34 @@
-import * as util from 'util';
-
-export function measure(
-  target: any,
-  propertyKey: string,
+export function measure<T = any>(
+  target: T,
+  propertyName: string,
   descriptor: PropertyDescriptor
 ): any {
   const originalMethod = descriptor.value;
+
   const name =
     target && target.constructor && target.constructor.name
-      ? `${target.constructor.name}.${propertyKey}`
-      : propertyKey;
+      ? `${target.constructor.name}.${propertyName.toString()}`
+      : propertyName.toString();
 
-  if (util.types.isAsyncFunction(originalMethod)) {
-    descriptor.value = async function (...args: any): Promise<any> {
-      const description = name === 'Function.crawl' ? ' ' + args[0] : '';
-      console.log(`${name}${description} started.`);
-      const start = performance.now();
-      const result = await originalMethod.apply(this, args);
-      const end = performance.now();
-      console.log(
-        `${name}${description} finished after ${(end - start).toFixed(
+  if (descriptor.value) {
+    descriptor.value = async function (...args: any): Promise<void> {
+      const start = Date.now();
+      console.info(`${name} started.`);
+
+      let result = originalMethod.apply(this, args);
+
+      if (!!(result && result.then !== undefined)) {
+        result = await result;
+      }
+      console.info(
+        `${name} finished after ${(Date.now() - start).toFixed(
           2
         )} milliseconds.`
       );
       return result;
     };
-  } else {
-    descriptor.value = function (...args) {
-      const description = name === 'Function.crawl' ? ' ' + args[0] : '';
-      console.log(`${name}${description} started.`);
-      const start = performance.now();
-      const result = originalMethod.apply(this, args);
-      const end = performance.now();
-      console.log(
-        `${name}${description} finished after ${(end - start).toFixed(
-          2
-        )} milliseconds.`
-      );
-      return result;
-    };
+
+    return descriptor;
   }
-  return descriptor;
+  throw new Error('@measure is applicable only on a methods.');
 }

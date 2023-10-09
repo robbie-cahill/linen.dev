@@ -1,117 +1,62 @@
-import fs from 'fs';
 import { LLMChain, RetrievalQAChain } from 'langchain/chains';
 import { ChatPromptTemplate, PromptTemplate } from 'langchain/prompts';
 import { FaissStore } from 'langchain/vectorstores/faiss';
-import { TokenTextSplitter } from 'langchain/text_splitter';
 import { Document } from 'langchain/document';
 import { measure } from './utils/measure';
-import env from './utils/env';
 import Typesense from './typesense';
-import { OpenAI } from 'langchain/llms/openai';
-import StringUtils from './utils/string';
-import { OpenAIEmbeddings } from 'langchain/embeddings/openai';
-import WebCrawler from './crawlers/web';
-import FileStore from './stores/file';
-import { PrismaVectorStore } from 'langchain/vectorstores/prisma';
-import * as database from '@linen/database';
-
-const embeddingsModel = new OpenAIEmbeddings({
-  openAIApiKey: env.OPENAI_API_TOKEN,
-});
-
-const model = new OpenAI({
-  modelName: 'gpt-3.5-turbo-16k',
-  openAIApiKey: env.OPENAI_API_TOKEN,
-  temperature: 0,
-});
-
-interface CrawlOptions {
-  selectors: string[];
-  output: string;
-}
+import { model, embeddingsModel } from './models';
+import Splitter from './splitter';
 
 export default class LangChain {
+  @measure
   static async predict({
     query,
     typesenseApiKey,
-    communityName,
     summarize,
-    accountId,
     threadId,
+    channelId,
+    channelName,
+    accountId,
   }: {
     query: string;
     typesenseApiKey: string;
-    communityName: string;
-    accountId: string;
     summarize: boolean;
     threadId: string;
+    channelId?: string;
+    channelName?: string;
+    accountId: string;
   }) {
     const body = await Typesense.queryThreads({
       query,
       apiKey: typesenseApiKey,
+      channelId,
+      channelName,
+      accountId,
     });
 
     if (summarize) {
       for await (let item of body) {
-        item.body = await this.summarize(item.body);
+        item.content = await this.summarize(item.content);
       }
     }
     const typesenseResults = body
-      .filter((t) => t.id !== threadId)
+      .filter((t) => t.id !== threadId && t.threadId !== threadId)
       .map(
-        (b) =>
+        ({ content, ...b }) =>
           new Document({
-            pageContent: b.body,
-            metadata: { source: b.id },
+            pageContent: content,
+            metadata: { ...b },
           })
       );
 
-    const directory = `.db/${communityName}`;
-    const fileStore = await FaissStore.load(directory, embeddingsModel);
-    const fileResults = await fileStore.similaritySearch(query, env.CHUNKS);
-
-    const prismaVectorStore = PrismaVectorStore.withModel<database.embeddings>(
-      database.prisma
-    ).create(embeddingsModel, {
-      prisma: database.Prisma,
-      tableName: 'embeddings',
-      vectorColumnName: 'embedding',
-      columns: {
-        threadId: PrismaVectorStore.IdColumn,
-        value: PrismaVectorStore.ContentColumn,
-      },
-      filter: {
-        accountId: { equals: accountId },
-        confidence: { equals: 100 },
-      },
-    });
-    const vectorResults = await prismaVectorStore.similaritySearch(
-      query,
-      env.CHUNKS
-    );
-
-    const docs = [...typesenseResults, ...fileResults, ...vectorResults];
-    const vectorStore = await FaissStore.fromDocuments(docs, embeddingsModel);
-
-    return await this.askLLM({ query, vectorStore });
-  }
-
-  static async crawlToStore({
-    url,
-    communityName,
-    options,
-  }: {
-    url: string;
-    communityName: string;
-    options: CrawlOptions;
-  }) {
-    await this.crawl(url, options);
-    const docs = await this.getDocuments(url);
-    const splitDocs = await this.splitDocuments(docs);
-    const vectorStore = await this.storeFunction({ splitDocs });
-    const directory = `.db/${communityName}`;
-    fs.mkdirSync(directory, { recursive: true });
-    await vectorStore.save(directory);
+    const chunks = await Splitter.splitDocuments(typesenseResults);
+    const vectorStore = await FaissStore.fromDocuments(chunks, embeddingsModel);
+    try {
+      return await this.askLLM({ query, vectorStore });
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
   }
 
   @measure
@@ -150,78 +95,15 @@ Context: {context}
 Question: {question}
 Helpful Answer:`;
 
-    const chain = RetrievalQAChain.fromLLM(
-      model,
-      vectorStore.asRetriever({ k: env.CHUNKS * 2 }),
-      {
-        prompt: PromptTemplate.fromTemplate(template),
-        returnSourceDocuments: true,
-      }
-    );
+    const chain = RetrievalQAChain.fromLLM(model, vectorStore.asRetriever(), {
+      prompt: PromptTemplate.fromTemplate(template),
+      returnSourceDocuments: true,
+    });
 
     const response = await chain.call({
       query,
     });
     return response;
-  }
-
-  @measure
-  private static async crawl(url: string, options: CrawlOptions) {
-    const { output, selectors } = options;
-    const exists = await FileStore.has({ dir: output });
-    if (exists) {
-      return;
-    }
-
-    const { documents } = await WebCrawler.crawl({
-      url,
-      selectors,
-    });
-
-    await FileStore.write({ dir: output, files: documents });
-  }
-
-  @measure
-  private static async storeFunction({
-    directory,
-    splitDocs,
-  }: {
-    directory?: string;
-    splitDocs: Document[];
-  }) {
-    const vectorStore = await FaissStore.fromDocuments(
-      splitDocs,
-      embeddingsModel
-    );
-    if (!!directory && fs.existsSync(directory)) {
-      const loadedVectorStore = await FaissStore.load(
-        directory,
-        embeddingsModel
-      );
-      await vectorStore.mergeFrom(loadedVectorStore);
-    }
-    return vectorStore;
-  }
-
-  @measure
-  private static async splitDocuments(
-    documents: Document[],
-    chunkSize = env.CHUNK_SIZE
-  ) {
-    const splitter = new TokenTextSplitter({
-      encodingName: 'gpt2',
-      chunkSize,
-      chunkOverlap: 0,
-    });
-    return await splitter.splitDocuments(documents);
-  }
-
-  private static async getDocuments(url: string) {
-    const dir = `.db/crawl/${StringUtils.clean(url)}`;
-    const files = await FileStore.read({ dir });
-    return files.map(({ content }) => {
-      return new Document(JSON.parse(content));
-    });
   }
 
   @measure

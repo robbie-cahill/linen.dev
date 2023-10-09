@@ -29,5 +29,9 @@ module.exports = {
       },
       restart_delay: 1000 * 60 * 30,
     },
+    {
+      name: 'llm',
+      script: 'node dist/index-llm.js',
+    },
   ],
 };

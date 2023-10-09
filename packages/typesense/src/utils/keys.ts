@@ -79,11 +79,11 @@ export async function createReadOnly() {
   });
 }
 
-export async function createSearchOnlyKey(collectionName: string) {
+export async function createSearchOnlyKey(collections: string[]) {
   const key = await client.keys().create({
     description: `Search-only`,
     actions: ['documents:search'],
-    collections: [collectionName],
+    collections,
   });
 
   if (!key.value || !key.expires_at) {
