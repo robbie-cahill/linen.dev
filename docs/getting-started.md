@@ -167,8 +167,39 @@ npx dotenv -e .env -- mix phx.server
 
 ## (Optional) Local domain redirect testing
 
+You may use either Tunnelmole or ngrok for local domain redirect testing. Tunnelmole is an open source tunneling tool, while ngrok is a popular closed source tunneling tool.
+
+### Tunnelmole
+
+Tunnelmole is an open source tunneling tool that allows you to expose your localhost for testing and development. More details can be found on the [Tunnelmole Github Repo](https://github.com/robbie-cahill/tunnelmole-client).
+
+Here is how you can set up and use Tunnelmole:
+
+1. Install Tunnelmole using one of the following options:
+    - NPM: `npm install -g tunnelmole`
+    - Linux: `curl -s https://tunnelmole.com/sh/install-linux.sh | sudo bash`
+    - Mac: `curl -s https://tunnelmole.com/sh/install-mac.sh --output install-mac.sh && sudo bash install-mac.sh`
+    - Windows: Install with NPM, or if you don't have NodeJS installed, download the `exe` file for Windows [here](https://tunnelmole.com/downloads/tmole.exe) and put it somewhere in your PATH.
+2. Run Tunnelmole: `tmole 3000`
+    - You'll see two URLs. Either of the URL can be set as redirect domain in the dev database.
+
+     ```
+     ➜  ~ tmole 8000
+     http://bvdo5f-ip-49-183-170-144.tunnelmole.net is forwarding to localhost:3000
+     https://bvdo5f-ip-49-183-170-144.tunnelmole.net is forwarding to localhost:3000
+     ```
+3. Update the dev database to have the redirect URL from the step above.
+
+### ngrok
+
+ngrok is a popular closed source tunneling tool.
+
+Here is how you can set up and use ngrok:
+
 1. Ask for invite for ngrok account
 2. Setup [ngrok](https://ngrok.io/)
-3. pick subdomain i.e kam-test.ngrok.io
-4. Update dev database to have the redirect url `update accounts set "redirectDomain"='kam-test.ngrok.io' where id = '9677cb41-033e-4c1a-9ae5-ef178606cad3';` - replace with your subdomain that you chose
-5. run ngrok tunnel `ngrok http --region=us --hostname=kam-test.ngrok.io 3000`
+3. pick a subdomain i.e kam-test.ngrok.io
+4. Update dev database to have the redirect URL `update accounts set "redirectDomain"='kam-test.ngrok.io' where id = '9677cb41-033e-4c1a-9ae5-ef178606cad3';` - replace with your subdomain that you chose
+5. Run ngrok tunnel `ngrok http --region=us --hostname=kam-test.ngrok.io 3000`
+```
+Keep in mind that, depending on the specific use cases of your application, you might want to choose either Tunnelmole or ngrok. Both have their strengths and are built to serve slightly different use cases.
